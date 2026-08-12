@@ -256,7 +256,7 @@ static NSArray *allowed_tags = nil;
   [component setUid: uid];
 }
 
-- (BOOL) _removeDuplicateRecurrenceRulesFromCalendar: (iCalCalendar *) calendar
+- (BOOL) _removeDuplicatesFromCalendar: (iCalCalendar *) calendar
 {
   iCalRepeatableEntityObject *currentComponent;
   NSArray *allComponents;
@@ -270,36 +270,46 @@ static NSArray *allowed_tags = nil;
     {
       currentComponent = (iCalRepeatableEntityObject *) [allComponents objectAtIndex: i];
       modified = [currentComponent removeDuplicateRecurrenceRules] || modified;
+      modified = [currentComponent removeDuplicateAlarms] || modified;
     }
 
   return modified;
 }
 
-- (NSString *) _contentByRemovingDuplicateRecurrenceRulesFromString: (NSString *) iCalString
+- (BOOL) _stringRepeatsMarker: (NSString *) marker
+                     inString: (NSString *) iCalString
+{
+  NSRange firstRange, secondRange;
+
+  firstRange = [iCalString rangeOfString: marker
+                                 options: NSCaseInsensitiveSearch];
+  if (firstRange.location == NSNotFound)
+    return NO;
+
+  secondRange
+    = [iCalString rangeOfString: marker
+                        options: NSCaseInsensitiveSearch
+                          range: NSMakeRange (NSMaxRange (firstRange),
+                                              [iCalString length] - NSMaxRange (firstRange))];
+
+  return (secondRange.location != NSNotFound);
+}
+
+- (NSString *) _contentByRemovingDuplicatesFromString: (NSString *) iCalString
 {
   iCalCalendar *calendar;
-  NSRange firstRange, secondRange;
   BOOL modified;
 
   if (![iCalString length])
     return iCalString;
 
-  /* Avoid parsing the common single-RRULE case; duplicates need two markers. */
-  firstRange = [iCalString rangeOfString: @"RRULE"
-                                 options: NSCaseInsensitiveSearch];
-  if (firstRange.location == NSNotFound)
-    return iCalString;
-
-  secondRange
-    = [iCalString rangeOfString: @"RRULE"
-                        options: NSCaseInsensitiveSearch
-                          range: NSMakeRange (NSMaxRange (firstRange),
-                                              [iCalString length] - NSMaxRange (firstRange))];
-  if (secondRange.location == NSNotFound)
+  /* Skip parsing when no marker repeats, so no duplicate is possible. */
+  if (![self _stringRepeatsMarker: @"RRULE" inString: iCalString]
+      && ![self _stringRepeatsMarker: @"BEGIN:VALARM" inString: iCalString])
     return iCalString;
 
   calendar = [iCalCalendar parseSingleFromSource: iCalString];
-  modified = [self _removeDuplicateRecurrenceRulesFromCalendar: calendar];
+  modified = [self _removeDuplicatesFromCalendar: calendar];
 
   if (modified)
     iCalString = [calendar versitString];
@@ -322,14 +332,14 @@ static NSArray *allowed_tags = nil;
       || [[self ownerInContext: context] isEqualToString: [[context activeUser] login]]
       || ![sm validatePermission: SOGoCalendarPerm_ViewAllComponent
 	      onObject: self inContext: context])
-    iCalString = [self _contentByRemovingDuplicateRecurrenceRulesFromString: content];
+    iCalString = [self _contentByRemovingDuplicatesFromString: content];
   else if (![sm validatePermission: SOGoCalendarPerm_ViewDAndT
 		onObject: self inContext: context])
     {
       tmpCalendar = [[self calendar: NO secure: NO] mutableCopy];
 
       // We filter all components, in case we have RECURRENCE-ID
-      [self _removeDuplicateRecurrenceRulesFromCalendar: tmpCalendar];
+      [self _removeDuplicatesFromCalendar: tmpCalendar];
       allComponents = [tmpCalendar childrenWithTag: [self componentTag]];
 
       for (i = 0; i < [allComponents count]; i++)
@@ -482,7 +492,7 @@ static NSArray *allowed_tags = nil;
   NSUInteger count, max;
 
   calendar = [self calendar: NO secure: YES];
-  [self _removeDuplicateRecurrenceRulesFromCalendar: calendar];
+  [self _removeDuplicatesFromCalendar: calendar];
   allComponents = [calendar childrenWithTag: [self componentTag]];
   max = [allComponents count];
   for (count = 0; count < max; count++)
@@ -726,6 +736,7 @@ static NSArray *allowed_tags = nil;
   NSString *newUid;
 
   [newObject removeDuplicateRecurrenceRules];
+  [newObject removeDuplicateAlarms];
 
   if (!isNew
       && [newObject isRecurrent])
@@ -765,7 +776,7 @@ static NSArray *allowed_tags = nil;
                     baseVersion: (unsigned int) newVersion
 {
   if ([theComponent isKindOfClass: [iCalCalendar class]])
-    [self _removeDuplicateRecurrenceRulesFromCalendar: theComponent];
+    [self _removeDuplicatesFromCalendar: theComponent];
 
   return [super saveComponent: theComponent
                   baseVersion: newVersion];

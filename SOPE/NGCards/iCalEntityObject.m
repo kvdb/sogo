@@ -26,6 +26,7 @@
 
 #import "NSCalendarDate+NGCards.h"
 
+#import "CardElement.h"
 #import "iCalAlarm.h"
 #import "iCalCalendar.h"
 #import "iCalDateTime.h"
@@ -401,6 +402,66 @@
 - (NSArray *) alarms
 {
   return [self childrenWithTag: @"valarm"];
+}
+
+/* RFC 9074 section 4: a VALARM UID identifies one alarm, so a shared UID means
+   the same alarm twice. X-*-ALARM-UID counts too; Evolution writes it. */
+- (NSString *) _identityOfAlarm: (iCalAlarm *) alarm
+{
+  NSEnumerator *allChildren;
+  CardElement *currentChild;
+  NSString *tag, *value;
+
+  allChildren = [[alarm children] objectEnumerator];
+  while ((currentChild = [allChildren nextObject]))
+    {
+      tag = [[currentChild tag] uppercaseString];
+      if ([tag isEqualToString: @"UID"] || [tag hasSuffix: @"-ALARM-UID"])
+        {
+          value = [currentChild flattenedValuesForKey: @""];
+          if ([value length])
+            return [NSString stringWithFormat: @"uid:%@", value];
+        }
+    }
+
+  return [NSString stringWithFormat: @"versit:%@", [alarm versitString]];
+}
+
+/* RFC 5545 section 3.6.1 allows any number of VALARMs, so alarms that differ
+   are kept; only repeats of one identity are dropped. */
+- (BOOL) removeDuplicateAlarms
+{
+  NSMutableArray *duplicateAlarms, *identities;
+  NSEnumerator *allAlarms;
+  iCalAlarm *currentAlarm;
+  NSString *identity;
+  NSArray *alarms;
+
+  alarms = [self alarms];
+  if ([alarms count] < 2)
+    return NO;
+
+  duplicateAlarms = [NSMutableArray array];
+  identities = [NSMutableArray array];
+
+  allAlarms = [alarms objectEnumerator];
+  while ((currentAlarm = [allAlarms nextObject]))
+    {
+      identity = [self _identityOfAlarm: currentAlarm];
+      if ([identities containsObject: identity])
+        [duplicateAlarms addObject: currentAlarm];
+      else
+        [identities addObject: identity];
+    }
+
+  allAlarms = [duplicateAlarms objectEnumerator];
+  while ((currentAlarm = [allAlarms nextObject]))
+    {
+      [currentAlarm setParent: nil];
+      [children removeObjectIdenticalTo: currentAlarm];
+    }
+
+  return ([duplicateAlarms count] > 0);
 }
 
 - (void) setAttach: (NSArray *) _value
