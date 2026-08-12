@@ -26,6 +26,7 @@
 
 #import "NSCalendarDate+NGCards.h"
 
+#import "CardElement.h"
 #import "iCalAlarm.h"
 #import "iCalCalendar.h"
 #import "iCalDateTime.h"
@@ -401,6 +402,72 @@
 - (NSArray *) alarms
 {
   return [self childrenWithTag: @"valarm"];
+}
+
+/* Identity of an alarm for duplicate detection: its UID when it has one,
+   otherwise its serialized form. RFC 9074, section 4 defines UID on VALARM as
+   the identifier that "uniquely" refers to that alarm, so two components
+   carrying one UID are the same alarm stored twice even when their other
+   properties drifted apart. X-*-ALARM-UID is honoured too, since that is what
+   Evolution and SOGo's own web interface write. */
+- (NSString *) _identityOfAlarm: (iCalAlarm *) alarm
+{
+  NSEnumerator *allChildren;
+  CardElement *currentChild;
+  NSString *tag, *value;
+
+  allChildren = [[alarm children] objectEnumerator];
+  while ((currentChild = [allChildren nextObject]))
+    {
+      tag = [[currentChild tag] uppercaseString];
+      if ([tag isEqualToString: @"UID"] || [tag hasSuffix: @"-ALARM-UID"])
+        {
+          value = [currentChild flattenedValuesForKey: @""];
+          if ([value length])
+            return [NSString stringWithFormat: @"uid:%@", value];
+        }
+    }
+
+  return [NSString stringWithFormat: @"versit:%@", [alarm versitString]];
+}
+
+/* Remove alarms that are duplicates of one already kept, and report whether
+   anything was removed. RFC 5545, section 3.6.1 allows any number of VALARM
+   components, so alarms that genuinely differ are always preserved; only
+   repeats of one identity are dropped. */
+- (BOOL) removeDuplicateAlarms
+{
+  NSMutableArray *duplicateAlarms, *identities;
+  NSEnumerator *allAlarms;
+  iCalAlarm *currentAlarm;
+  NSString *identity;
+  NSArray *alarms;
+
+  alarms = [self alarms];
+  if ([alarms count] < 2)
+    return NO;
+
+  duplicateAlarms = [NSMutableArray array];
+  identities = [NSMutableArray array];
+
+  allAlarms = [alarms objectEnumerator];
+  while ((currentAlarm = [allAlarms nextObject]))
+    {
+      identity = [self _identityOfAlarm: currentAlarm];
+      if ([identities containsObject: identity])
+        [duplicateAlarms addObject: currentAlarm];
+      else
+        [identities addObject: identity];
+    }
+
+  allAlarms = [duplicateAlarms objectEnumerator];
+  while ((currentAlarm = [allAlarms nextObject]))
+    {
+      [currentAlarm setParent: nil];
+      [children removeObjectIdenticalTo: currentAlarm];
+    }
+
+  return ([duplicateAlarms count] > 0);
 }
 
 - (void) setAttach: (NSArray *) _value

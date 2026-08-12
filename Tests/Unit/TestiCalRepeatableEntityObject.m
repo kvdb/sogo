@@ -17,6 +17,7 @@
  */
 
 #import <NGCards/iCalCalendar.h>
+#import <NGCards/iCalEntityObject.h>
 #import <NGCards/iCalRepeatableEntityObject.h>
 
 #import "SOGoTest.h"
@@ -57,6 +58,121 @@
   testEquals([[rules objectAtIndex: 1] versitString],
              @"RRULE:FREQ=WEEKLY;INTERVAL=2;BYDAY=FR");
   failIf([event removeDuplicateRecurrenceRules]);
+}
+
+/* RFC 5545, section 3.6.1 allows any number of VALARM components, so alarms
+   that differ must survive; only exact repeats are dropped. */
+- (void) test_removeDuplicateAlarmsKeepsDistinctAlarms
+{
+  iCalCalendar *calendar;
+  iCalEntityObject *event;
+  NSArray *alarms;
+  NSString *versit;
+
+  versit = @"BEGIN:VCALENDAR\r\n"
+    @"VERSION:2.0\r\n"
+    @"BEGIN:VEVENT\r\n"
+    @"UID:duplicate-valarm\r\n"
+    @"DTSTART:20260211T123000Z\r\n"
+    @"BEGIN:VALARM\r\n"
+    @"ACTION:DISPLAY\r\n"
+    @"TRIGGER:-PT10M\r\n"
+    @"DESCRIPTION:ten minutes\r\n"
+    @"END:VALARM\r\n"
+    @"BEGIN:VALARM\r\n"
+    @"ACTION:DISPLAY\r\n"
+    @"TRIGGER:-PT10M\r\n"
+    @"DESCRIPTION:ten minutes\r\n"
+    @"END:VALARM\r\n"
+    @"BEGIN:VALARM\r\n"
+    @"ACTION:DISPLAY\r\n"
+    @"TRIGGER:-P1D\r\n"
+    @"DESCRIPTION:one day\r\n"
+    @"END:VALARM\r\n"
+    @"END:VEVENT\r\n"
+    @"END:VCALENDAR";
+  calendar = [iCalCalendar parseSingleFromSource: versit];
+  event = (iCalEntityObject *) [calendar firstChildWithTag: @"vevent"];
+
+  test([event removeDuplicateAlarms]);
+
+  alarms = [event alarms];
+  testWithMessage([alarms count] == 2,
+                  ([NSString stringWithFormat: @"expected 2 alarms, got %lu",
+                             (unsigned long) [alarms count]]));
+  failIf([event removeDuplicateAlarms]);
+}
+
+/* RFC 9074, section 4: the UID uniquely refers to one alarm, so two components
+   carrying it are the same alarm twice even when their bodies drifted apart. */
+- (void) test_removeDuplicateAlarmsCollapsesSharedUID
+{
+  iCalCalendar *calendar;
+  iCalEntityObject *event;
+  NSString *versit;
+
+  versit = @"BEGIN:VCALENDAR\r\n"
+    @"VERSION:2.0\r\n"
+    @"BEGIN:VEVENT\r\n"
+    @"UID:shared-alarm-uid\r\n"
+    @"DTSTART:20260211T123000Z\r\n"
+    @"BEGIN:VALARM\r\n"
+    @"UID:37e0f1a4-6d0c-4a0e-9d3b-6b6f0f5c1a22\r\n"
+    @"ACTION:DISPLAY\r\n"
+    @"TRIGGER:-PT10M\r\n"
+    @"DESCRIPTION:ten minutes\r\n"
+    @"END:VALARM\r\n"
+    @"BEGIN:VALARM\r\n"
+    @"UID:37e0f1a4-6d0c-4a0e-9d3b-6b6f0f5c1a22\r\n"
+    @"ACTION:DISPLAY\r\n"
+    @"TRIGGER:-PT10M\r\n"
+    @"DESCRIPTION:ten minutes\r\n"
+    @"ACKNOWLEDGED:20260211T121500Z\r\n"
+    @"END:VALARM\r\n"
+    @"END:VEVENT\r\n"
+    @"END:VCALENDAR";
+  calendar = [iCalCalendar parseSingleFromSource: versit];
+  event = (iCalEntityObject *) [calendar firstChildWithTag: @"vevent"];
+
+  test([event removeDuplicateAlarms]);
+  testWithMessage([[event alarms] count] == 1,
+                  ([NSString stringWithFormat: @"expected 1 alarm, got %lu",
+                             (unsigned long) [[event alarms] count]]));
+}
+
+/* A single alarm, and alarms that merely share a trigger, must be left alone. */
+- (void) test_removeDuplicateAlarmsLeavesCleanEventUntouched
+{
+  iCalCalendar *calendar;
+  iCalEntityObject *event;
+  NSString *versit;
+
+  versit = @"BEGIN:VCALENDAR\r\n"
+    @"VERSION:2.0\r\n"
+    @"BEGIN:VEVENT\r\n"
+    @"UID:clean-valarm\r\n"
+    @"DTSTART:20260211T123000Z\r\n"
+    @"BEGIN:VALARM\r\n"
+    @"ACTION:DISPLAY\r\n"
+    @"TRIGGER:-PT10M\r\n"
+    @"DESCRIPTION:popup\r\n"
+    @"END:VALARM\r\n"
+    @"BEGIN:VALARM\r\n"
+    @"ACTION:EMAIL\r\n"
+    @"TRIGGER:-PT10M\r\n"
+    @"DESCRIPTION:mail\r\n"
+    @"SUMMARY:mail\r\n"
+    @"ATTENDEE:mailto:someone@example.org\r\n"
+    @"END:VALARM\r\n"
+    @"END:VEVENT\r\n"
+    @"END:VCALENDAR";
+  calendar = [iCalCalendar parseSingleFromSource: versit];
+  event = (iCalEntityObject *) [calendar firstChildWithTag: @"vevent"];
+
+  failIf([event removeDuplicateAlarms]);
+  testWithMessage([[event alarms] count] == 2,
+                  ([NSString stringWithFormat: @"expected 2 alarms, got %lu",
+                             (unsigned long) [[event alarms] count]]));
 }
 
 @end
